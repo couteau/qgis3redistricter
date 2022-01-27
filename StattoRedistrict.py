@@ -793,33 +793,58 @@ class StattoRedistrict(object):
 #        layers = self.iface.legendInterface().layers()
         layers = [tree_layer.layer() for tree_layer in QgsProject.instance().layerTreeRoot().findLayers()]
         layer_list = []
+
+        # make a list with the project directory and the directores for each file based layer 
+        # for the project directory, the layer will be extracted from the file name
+        # for file based layers, track the associated layer in the list
+        directories = [(None, QgsProject.instance().homePath())]
+        print('Project directory ' + QgsProject.instance().homePath())
         for layer in layers:
-            fileDir = os.path.splitext(layer.source())
+            providerType = layer.providerType()
+            # only do this for file-based layers -- it doesn't work for database layers (e.g. PostGIS)
+            if providerType == 'ogr' or providerType == 'spatialite' or providerType == 'delimitedtext':
+                fileDir, _ = os.path.splitext(layer.source())
+                directories.append((layer, fileDir))
+
+        for layer, fileDir in directories:
 #            print('Source: ' + layer.source())
-            for layerDir in fileDir:
-                for ffile in glob.glob(str(layerDir) + '*qgis.red'):
-                        print(' checking file ' + ffile)
-#                    try:
-                        f = open(ffile,'r')
-                        planStatus = 0
-                        for line in f:
-        #                    QgsMessageLog.logMessage(str(line) + ' ' + str(planStatus))
-                            line = line.strip()
-                            lineList = line.split('\t')
-                            if lineList[0] == 'New Plan' and planStatus == 0:
-                                print('     plan status 1')
-                                planStatus = 1
-                            elif lineList[0] == 'planname' and planStatus == 1:
-                                print('     plan status 2')
-                                planStatus = 2
-                                self.dlgplanmanager.lstRedistrictingPlans.addItem(layer.name() + ' (' + str(lineList[1]) + ')')
-                                strLayerName = str(layer.name())
-                                planManagerList.append(strLayerName + '|' + str(ffile))
-                            elif lineList[0] == 'End Plan':
+            for ffile in glob.glob(os.path.join(str(fileDir), '*qgis.red')):
+                print(' checking file ' + ffile)
+#                try:
+                f = open(ffile,'r')
+                planStatus = 0
+                for line in f:
+#                    QgsMessageLog.logMessage(str(line) + ' ' + str(planStatus))
+                    line = line.strip()
+                    lineList = line.split('\t')
+                    if lineList[0] == 'New Plan' and planStatus == 0:
+                        print('     plan status 1')
+                        planStatus = 1
+                    elif lineList[0] == 'planname' and planStatus == 1:
+                        print('     plan status 2')
+                        planStatus = 2
+                        planName = str(lineList[1])
+                        # for plans in the project directory, extract the layer name from the file name
+                        # TODO: store the layer name in the file to avoid issues with layer names that have illegal filename characters
+                        if layer is None:
+                            _, fn = os.path.split(ffile)
+                            # strip of the plan name and extension from the end of the file name - the rest is the layer name
+                            l = QgsProject.instance().mapLayersByName(fn[0:len(fn) - len('_' + planName + '.qgis.red')])
+                            if len(l) == 0:
+                                print('no matching layer found')
                                 planStatus = 0
-                        f.close()
-#                    except:
-#                        QgsMessageLog.logMessage("No plan found for layer " + layer.name())
+                                break
+                            layerName = l[0].name()
+                        else:
+                            layerName = layer.name()
+                        self.dlgplanmanager.lstRedistrictingPlans.addItem('{0} ({1})'.format(layerName, planName))
+                        strLayerName = str(layerName)
+                        planManagerList.append(strLayerName + '|' + str(ffile))
+                    elif lineList[0] == 'End Plan':
+                        planStatus = 0
+                f.close()
+#                except:
+#                    QgsMessageLog.logMessage("No plan found for layer " + layer.name())
         self.dlgparameters.cmbActiveLayer.clear()
         self.dlgparameters.cmbActiveLayer.addItems(layer_list)
         if self.activeLayer != None:
@@ -959,7 +984,11 @@ class StattoRedistrict(object):
 
 #        try:
         if fileName == None:
-            self.activeLayer.source() + '.qgis.red'
+            providerType = self.activeLayer.providerType()
+            if providerType == 'ogr' or providerType == 'spatialite' or providerType == 'delimitedtext':  
+                fileName = self.activeLayer.source() + '_' + self.planName + '.qgis.red'
+            else:
+                fileName = os.path.join(QgsProject.instance().homePath(), self.activeLayer.name() + '_' + self.planName + '.qgis.red')
         f = open(fileName,'w')
         dp = self #exceptionally inelegant
         f.write('New Plan\n')
@@ -1357,7 +1386,12 @@ class StattoRedistrict(object):
             else:
                 self.attrdockwidget.tblPop.setHorizontalHeaderItem(4+numDataFields,QTableWidgetItem(d.name + '%'))
 
-        fileDir, fileext = os.path.splitext(self.activeLayer.source())
+        providerType = self.activeLayer.providerType()
+        if providerType == 'ogr' or providerType == 'spatialite' or providerType == 'delimitedtext':  
+            fileDir, fileext = os.path.splitext(self.activeLayer.source())
+        else:
+            fileDir = os.path.join(QgsProject.instance().homePath(), self.activeLayer.name())
+       
         self.saveFileName = fileDir + '_' + self.planName + '.qgis.red'
 
         if len(districtName) == 0:
